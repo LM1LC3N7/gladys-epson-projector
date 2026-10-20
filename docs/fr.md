@@ -1,67 +1,114 @@
-# Template de démonstration
+# Vidéoprojecteurs Epson pour Gladys
 
-Ceci est la documentation utilisateur de l'intégration. Gladys ré-héberge ce
-fichier et affiche un lien **Documentation** permanent vers lui dans l'écran
-de configuration (dans la langue de l'utilisateur, avec l'anglais en repli) —
-c'est au moment de configurer que l'utilisateur en a le plus besoin. Gardez
-les courtes indications d'accueil dans les blocs `section` du `config_schema`
-du manifest ; mettez ici le pas-à-pas détaillé (captures d'écran, dépannage…).
+Pilotez vos **vidéoprojecteurs Epson** (home cinéma EH-TW / EH-LS,
+professionnels EB…) depuis Gladys, en local, sans aucun cloud : allumage,
+veille, source, mode couleur, sourdine A/V, et les heures de lampe (ou de
+source lumineuse).
+
+> **Important.** Cette intégration n'a jamais été testée avec un vrai appareil :
+> elle a été écrite à partir de la bibliothèque `epson-projector` (celle de
+> Home Assistant) et du protocole publié par Epson, et testée seulement avec
+> un faux vidéoprojecteur. Vos retours sont les bienvenus. Intégration non
+> officielle, sans lien avec Epson.
+
+## Installation
+
+1. Sur le vidéoprojecteur, activez la **veille réseau** : selon le modèle,
+   _Réglages_ ou _ECO_ > **Mode attente : Communication activée** (ou _Veille
+   réseau_). Sans elle, le vidéoprojecteur quitte le réseau en veille et ne
+   peut pas être allumé depuis Gladys.
+2. Donnez à chaque vidéoprojecteur une **adresse IP fixe** dans votre box
+   (bail DHCP réservé).
+3. Dans Gladys, installez l'intégration **Epson Projector**, puis ouvrez sa
+   configuration.
+4. Saisissez les adresses IP, séparées par des virgules (par exemple
+   `192.168.1.50, 192.168.1.51`). Le bouton **Chercher les vidéoprojecteurs**
+   peut aussi les chercher sur le réseau (facultatif : la recherche ne
+   traverse pas tous les réseaux).
+5. Si un mot de passe protège le contrôle réseau de vos vidéoprojecteurs,
+   saisissez-le (16 caractères au plus, le même pour tous).
+6. Les vidéoprojecteurs apparaissent dans l'onglet **Découverte** : créez-les.
+
+L'intégration parle au vidéoprojecteur en **ESC/VP.net** (port TCP 3629), le
+protocole de contrôle réseau publié par Epson, et lit son état à l'intervalle
+de rafraîchissement de la configuration (30 s par défaut). Elle n'utilise pas
+la télécommande web du vidéoprojecteur.
 
 ## Ce que vous obtenez
 
-Six appareils de démonstration apparaissent après l'installation : une
-station météo (vraies données Open-Meteo), un interrupteur, une lampe
-variable, une prise connectée avec mesure de puissance, un détecteur de
-mouvement et une caméra.
+| Fonction        | Type Gladys                  | Remarque                                                               |
+| --------------- | ---------------------------- | ---------------------------------------------------------------------- |
+| Marche          | état binaire (lecture seule) | 1 allumé ou en préchauffage, 0 en veille, refroidissement, injoignable |
+| Allumer         | bouton                       | envoyé seulement depuis la veille                                      |
+| Veille          | bouton                       | envoyé seulement quand il est allumé                                   |
+| État            | texte (lecture seule)        | Standby, Warming up, On, Cooling down, Abnormal standby…               |
+| Source          | liste                        | HDMI1, HDMI2, Computer, Video, USB, LAN, Screen mirroring…             |
+| Mode couleur    | liste                        | Cinema, Natural, Dynamic, Bright Cinema, Game…                         |
+| Sourdine A/V    | bouton (sourdine)            | chaque appui lit l'état, puis règle l'inverse                          |
+| Heures de lampe | durée en heures              | les heures de source lumineuse sur les modèles laser                   |
 
-## Configuration
+Volontairement, pas d'**interrupteur** : un « tout éteindre » ou « tout
+allumer » d'un assistant vocal ou d'une scène n'allume ni ne coupe votre
+vidéoprojecteur.
 
-1. Ouvrez l'onglet **Configuration** de l'intégration.
-2. Renseignez la **latitude** et la **longitude** que la station météo de
-   démonstration doit observer (Paris par défaut), et choisissez votre unité
-   de température. L'**intervalle de rafraîchissement** règle la fréquence
-   de lecture de la station météo et de la puissance de la prise : toutes
-   les 5 minutes par défaut, toutes les minutes au plus.
-3. Enregistrez : les appareils apparaissent dans l'onglet **Découverte**,
-   prêts à être ajoutés.
+Source, mode couleur et sourdine A/V ne sont lus et réglés que lorsque le
+vidéoprojecteur est allumé. Les sources et modes couleur proposés dépendent du
+modèle : une valeur refusée par le modèle est signalée « refusée par le
+vidéoprojecteur ». Une source ou un mode couleur affiché par le
+vidéoprojecteur et encore inconnu de la liste y est ajouté de lui-même
+(utilisez « Mettre à jour » dans Gladys pour le voir).
 
-Le réglage **Préférer la connexion locale** pilote la prise de
-démonstration : elle affiche en badge le canal réellement utilisé (local ou
-cloud), avec un point orange quand elle fonctionne en mode dégradé (local
-refusé, bascule cloud).
+## Commandes
 
-## Actions
+Chaque commande lit d'abord l'état de marche du vidéoprojecteur, et décide
+d'après lui :
 
-- **Tester le fournisseur météo** — effectue une requête en direct vers
-  Open-Meteo et affiche la température et l'humidité actuelles sous le
-  bouton.
-- **Identifier un appareil** — choisissez un de vos appareils dans la liste
-  et il se signale (la lampe de démonstration « clignote » dans les logs).
+- **Allumer** n'est envoyé que depuis la veille ; déjà allumé ou en
+  préchauffage, rien n'est envoyé. Pendant le refroidissement (ou en veille
+  anormale), rien n'est envoyé et la raison est donnée.
+- **Veille** n'est envoyé que lorsque le vidéoprojecteur est allumé.
+- Le vidéoprojecteur ne confirme une commande de marche qu'à la fin de son
+  préchauffage ou de son refroidissement (jusqu'à 40 s) : Gladys reçoit la
+  réponse dès que la commande est envoyée, et l'état est relu dès la
+  confirmation. En attendant, les autres commandes vers ce vidéoprojecteur
+  sont refusées, « rien n'a été envoyé ».
 
-## Scènes
+Chaque commande reçoit une réponse en moins de 4 secondes (Gladys attend
+5 secondes). Une commande partie vers le vidéoprojecteur sans confirmation est
+signalée « envoyée, sans confirmation » ; une commande qui n'a pas pu partir
+est signalée « rien n'a été envoyé » (en anglais dans Gladys : « nothing
+sent »).
 
-L'intégration ajoute ses propres cartes à l'éditeur de scènes (Gladys 5.1
-ou plus récent), dans la catégorie **Intégrations** :
+## Mot de passe
 
-- **Mouvement détecté** (déclencheur) — lance la scène quand un détecteur
-  de démonstration voit bouger quelque chose. Choisissez éventuellement le
-  détecteur et ce qui a bougé (personne, animal) ; laissés vides, toute
-  détection correspond. Les actions suivantes peuvent lire ce qui a bougé
-  avec `{{triggerEvent.data.target}}`.
-- **Identifier un appareil** (action) — fait se signaler l'appareil choisi.
-  Elle indique si l'appareil a pu se signaler, pour que les actions
-  suivantes puissent en dépendre.
+ESC/VP.net peut être protégé par un mot de passe sur le vidéoprojecteur. Un
+mot de passe manquant ou refusé arrête l'intégration pour ce vidéoprojecteur
+(le statut de l'intégration le dit) : il est réessayé toutes les 30 minutes,
+ou dès que vous enregistrez la configuration, jamais en boucle. Le mot de
+passe est gardé par Gladys dans sa base, jamais réaffiché, envoyé seulement à
+vos vidéoprojecteurs sur votre réseau local (ESC/VP.net le transmet en texte
+lisible), et jamais écrit dans les journaux ni dans le dossier de données de
+l'intégration.
 
-## Tableau de bord
+## Boutons de la configuration
 
-Ajoutez le widget **État de la démo** à un tableau de bord : il affiche en
-direct la température de la station météo et la puissance de la prise du
-bureau, la connexion utilisée par la prise (en orange si dégradée) et la
-position observée. Son bouton **Identifier la lampe** fait se signaler la
-lampe de démonstration.
+- **Chercher les vidéoprojecteurs** : une diffusion HELLO sur le réseau par
+  Gladys (port UDP 3629), puis les adresses saisies.
+- **Vérifier les vidéoprojecteurs** : l'état et les heures de lampe de chaque
+  vidéoprojecteur.
 
-## Dépannage
+## Données et vie privée
 
-L'intégration journalise tout ce qu'elle fait : consultez les logs de
-l'intégration depuis l'interface Gladys (ou `docker logs` sur l'hôte) avec
-`LOG_LEVEL=debug` pour le détail complet.
+L'intégration garde dans `/data/epson-projector.json` la liste des
+vidéoprojecteurs connus (identifiant, adresse, nom, codes vus) et les blocages
+de mot de passe (adresse et heure du prochain essai, jamais le mot de passe).
+Rien ne quitte votre réseau local.
+
+## Limites connues
+
+- Un seul mot de passe pour tous les vidéoprojecteurs.
+- Un vidéoprojecteur qui ne donne pas de numéro de série est identifié par son
+  adresse : si elle change, il devient un nouvel appareil.
+- Pas encore d'objectif, de trapèze, de volume, de gel d'image ni de réglages
+  d'image.
+- Jamais testée avec un vrai appareil : les vraies réponses peuvent différer.
