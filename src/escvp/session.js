@@ -187,6 +187,12 @@ export class Session {
   receiveFrames() {
     let end = this.buffer.indexOf(COLON);
     while (end !== -1) {
+      if (end + 1 > MAX_FRAME) {
+        // Bounded before parsing, whatever arrived in one chunk.
+        this.destroy();
+        this.rejectPending(ERROR_KINDS.PROTOCOL, 'Answer too long');
+        return;
+      }
       const frame = parseFrame(this.buffer.subarray(0, end + 1));
       this.buffer = this.buffer.subarray(end + 1);
       if (frame.kind === 'event') {

@@ -56,7 +56,6 @@ export function isLanAddress(host) {
     a === 10 ||
     (a === 172 && b >= 16 && b <= 31) ||
     (a === 192 && b === 168) ||
-    (a === 100 && b >= 64 && b <= 127) ||
     (a === 169 && b === 254 && !(c === 169 && d === 254))
   );
 }
@@ -280,15 +279,19 @@ export class EpsonApp {
     while (queue.items.length > 0) {
       const item = queue.items.shift();
       const holds = [];
+      const hold = (promise, label) => {
+        holds.push(promise);
+        // Set at once: a command pressed from now on is refused without waiting.
+        queue.held = label || 'busy';
+      };
       try {
-        item.resolve(await item.task((promise) => holds.push(promise)));
+        item.resolve(await item.task(hold));
       } catch (err) {
         item.reject(err);
       }
       if (holds.length > 0) {
-        queue.held = true;
         await Promise.allSettled(holds);
-        queue.held = false;
+        queue.held = undefined;
       }
     }
     queue.running = false;
@@ -532,6 +535,7 @@ export class EpsonApp {
   }
 
   async doScan() {
+    const started = this.now();
     let replies = [];
     let failed = false;
     try {
@@ -545,6 +549,7 @@ export class EpsonApp {
       this.logger.warn(`Network search failed: ${err.message}`);
     }
     const seen = new Set();
+    const toIdentify = [];
     for (const reply of (Array.isArray(replies) ? replies : []).slice(0, LIMITS.searchReplies)) {
       if (typeof reply?.payload_base64 !== 'string' || typeof reply.source_ip !== 'string') {
         continue;
@@ -568,15 +573,30 @@ export class EpsonApp {
         }
         continue;
       }
-      try {
-        await this.identify(address, hello.projectorName);
-      } catch (err) {
-        this.logger.debug?.(`${host}: ${err.message}`);
-      }
+      toIdentify.push({ address, name: hello.projectorName });
     }
-    await this.probeAddresses(true);
+    // A few at a time, none started after the deadline: the action of Gladys
+    // (60 s) always gets its answer.
+    let skipped = 0;
+    await mapLimit(toIdentify, this.timings.scanConcurrency, async ({ address, name }) => {
+      if (this.now() - started > this.timings.scanDeadline) {
+        skipped += 1;
+        return;
+      }
+      try {
+        await this.identify(address, name);
+      } catch (err) {
+        this.logger.debug?.(`${address.host}: ${err.message}`);
+      }
+    });
+    if (skipped > 0) {
+      this.logger.warn(`Search: ${skipped} answer(s) not checked in time`);
+    }
+    if (this.now() - started <= this.timings.scanDeadline) {
+      await this.probeAddresses(true);
+    }
     await this.publishDevices();
-    return { failed };
+    return { failed, skipped };
   }
 
   /**
@@ -679,9 +699,8 @@ export class EpsonApp {
     }
     const client = this.clientOf(projector);
     const wasReachable = this.readings.get(projector.id)?.reachable === true;
-    const budget = this.timings.connectTimeout + 6 * this.timings.requestTimeout;
     try {
-      const reading = await client.run(budget, async (session, left) => {
+      const reading = await client.run(this.timings.readBudget, async (session, left) => {
         const optional = async (command) => {
           try {
             return await client.query(session, command, left());
@@ -693,10 +712,11 @@ export class EpsonApp {
           }
         };
         if (projector.serial && !wasReachable) {
-          // Back online: make sure the address still belongs to this projector.
-          const serial = parseSerial(await optional(COMMANDS.SERIAL));
-          if (serial && serial !== projector.serial) {
-            return { moved: true };
+          // Back online (or first reading of this run): make sure the address
+          // still belongs to this projector before anything is published.
+          const identity = await this.checkIdentity(projector, client, session, left());
+          if (identity !== 'ok') {
+            return { identity };
           }
         }
         const power = powerState(await client.query(session, COMMANDS.POWER, left()));
@@ -713,15 +733,18 @@ export class EpsonApp {
         return result;
       });
       this.clearAuthBlock(projector);
-      if (reading.moved) {
-        this.logger.warn(
-          `${projectorName(projector)}: another projector answers at ${projector.host}`,
-        );
-        projector.host = '';
-        this.clients.get(projector.id)?.close();
-        this.clients.delete(projector.id);
-        this.persist();
+      if (reading.identity === 'moved') {
+        this.forgetAddress(projector);
         return { reachable: false };
+      }
+      if (reading.identity === 'unconfirmed') {
+        // No serial number answered: maybe another projector. Nothing is
+        // published nor commanded until it gives this projector's serial again.
+        this.warnOnce(
+          `identity:${projector.id}`,
+          `${projectorName(projector)}: no serial number at ${projector.host}, identity not confirmed`,
+        );
+        return undefined;
       }
       this.noteCodes(projector, reading);
       return reading;
@@ -773,15 +796,54 @@ export class EpsonApp {
     }
   }
 
-  /** Merges the values just read or set into the last reading, and publishes. */
-  async update(projector, values) {
+  /**
+   * Merges the values just read or set into the last reading, and publishes
+   * them without waiting: the ack of a command never depends on Gladys
+   * taking its states.
+   */
+  update(projector, values) {
     const previous = this.readings.get(projector.id);
     this.readings.set(projector.id, {
       ...(previous?.reachable ? previous : {}),
       reachable: true,
       ...values,
     });
-    await this.publishStates(projector);
+    this.publishStates(projector).catch(() => {});
+  }
+
+  /** Whether the projector was asked less than one poll interval ago (answered or not). */
+  readRecently(projector) {
+    const last = this.lastPoll.get(projector.id) ?? -Infinity;
+    return this.now() - last < this.config.pollInterval * 1000 * 0.9;
+  }
+
+  /**
+   * After a time without answer, the serial number is read again: `ok`, or
+   * `moved` (another serial at this address), or `unconfirmed` (no serial
+   * answered: maybe another projector, never taken for this one).
+   */
+  async checkIdentity(projector, client, session, budget) {
+    let serial;
+    try {
+      serial = parseSerial(await client.query(session, COMMANDS.SERIAL, budget));
+    } catch (err) {
+      if (err.kind !== ERROR_KINDS.REFUSED) {
+        throw err;
+      }
+    }
+    if (!serial) {
+      return 'unconfirmed';
+    }
+    return serial === projector.serial ? 'ok' : 'moved';
+  }
+
+  /** The address now answers with another serial: it is no longer this projector's. */
+  forgetAddress(projector) {
+    this.logger.warn(`${projectorName(projector)}: another projector answers at ${projector.host}`);
+    projector.host = '';
+    this.clients.get(projector.id)?.close();
+    this.clients.delete(projector.id);
+    this.persist();
   }
 
   recheck(projector, delay = this.timings.recheckDelay) {
@@ -812,6 +874,14 @@ export class EpsonApp {
       }
     } else if (!PRESSES.has(key)) {
       throw new Error(`Feature "${short(key)}" cannot be commanded`);
+    }
+    const held = this.queues.get(projector.id)?.held;
+    if (held) {
+      // A power command waits for its answer: refused at once, never queued.
+      throw new ProjectorError(
+        ERROR_KINDS.BUDGET,
+        `${projectorName(projector)} is ${held} (power command in progress), nothing sent`,
+      );
     }
     // The budget runs from the request of Gladys, the wait in the queue included.
     const started = this.now();
@@ -883,15 +953,49 @@ export class EpsonApp {
     }
     const client = this.clientOf(projector);
     const left = () => this.remaining(started);
+    const readBefore = (session, command, what) =>
+      this.readBefore(client, session, command, what, Math.min(this.timings.preRead, left()));
+    const send = (session, command, timeoutMs = left()) => {
+      // Checked just before the bytes leave: never after Gladys was told "nothing sent".
+      if (context.late || left() < this.timings.minSendTime) {
+        throw new ProjectorError(ERROR_KINDS.BUDGET, 'No time left for this command, nothing sent');
+      }
+      context.mayHaveSent = true;
+      return client.set(session, command, timeoutMs);
+    };
+    let outcome;
     try {
-      return await client.run(left(), async (session) => {
-        const power = powerState(
-          await client.query(session, COMMANDS.POWER, Math.min(this.timings.preRead, left())),
-        );
-        if (!power) {
-          throw new ProjectorError(ERROR_KINDS.PROTOCOL, 'Unexpected power state');
+      outcome = await client.run(left(), async (session) => {
+        if (projector.serial && this.readings.get(projector.id)?.reachable !== true) {
+          // Not answered since the last check (or since the start): the
+          // address must still be this projector's before anything is sent.
+          let identity;
+          try {
+            identity = await this.checkIdentity(
+              projector,
+              client,
+              session,
+              Math.min(this.timings.preRead, left()),
+            );
+          } catch (err) {
+            throw this.readError(err, 'Serial number');
+          }
+          if (identity === 'moved') {
+            this.forgetAddress(projector);
+            this.readings.set(projector.id, { reachable: false });
+            throw new Error(`${name}: another projector answers at its address, nothing sent`);
+          }
+          if (identity === 'unconfirmed') {
+            throw new Error(
+              `${name}: identity not confirmed (no serial number answered), nothing sent`,
+            );
+          }
         }
-        await this.update(projector, { power });
+        const power = powerState(await readBefore(session, COMMANDS.POWER, 'Power state'));
+        if (!power) {
+          throw new ProjectorError(ERROR_KINDS.PROTOCOL, 'Unexpected power state, nothing sent');
+        }
+        this.update(projector, { power });
         switch (key) {
           case FEATURES.POWER_ON:
             if (power.on === true) {
@@ -900,9 +1004,9 @@ export class EpsonApp {
             if (!power.canPowerOn) {
               throw new Error(`${name}: ${power.label.toLowerCase()}, nothing sent`);
             }
-            return this.power(projector, client, session, 'PWR ON', this.timings.powerOnWait, {
+            return this.power(projector, session, 'PWR ON', this.timings.powerOnWait, {
               left,
-              context,
+              send,
               hold,
             });
           case FEATURES.STANDBY:
@@ -912,9 +1016,9 @@ export class EpsonApp {
             if (power.code !== '01') {
               throw new Error(`${name}: ${power.label.toLowerCase()}, nothing sent`);
             }
-            return this.power(projector, client, session, 'PWR OFF', this.timings.powerOffWait, {
+            return this.power(projector, session, 'PWR OFF', this.timings.powerOffWait, {
               left,
-              context,
+              send,
               hold,
             });
           case FEATURES.SOURCE:
@@ -923,9 +1027,8 @@ export class EpsonApp {
               throw new Error(`${name}: not on (${power.label.toLowerCase()}), nothing sent`);
             }
             const command = key === FEATURES.SOURCE ? COMMANDS.SOURCE : COMMANDS.COLOR_MODE;
-            context.mayHaveSent = true;
-            await client.set(session, `${command} ${code}`, left());
-            await this.update(
+            await send(session, `${command} ${code}`);
+            this.update(
               projector,
               key === FEATURES.SOURCE ? { source: code } : { colorMode: code },
             );
@@ -938,15 +1041,12 @@ export class EpsonApp {
             }
             // Gladys sends a press, not a target: the mute is read just before
             // and the explicit opposite is sent, never a toggle.
-            const muted = parseMute(
-              await client.query(session, COMMANDS.MUTE, Math.min(this.timings.preRead, left())),
-            );
+            const muted = parseMute(await readBefore(session, COMMANDS.MUTE, 'A/V mute state'));
             if (muted === undefined) {
               throw new Error(`${name}: A/V mute state unknown, nothing sent`);
             }
-            context.mayHaveSent = true;
-            await client.set(session, `${COMMANDS.MUTE} ${muted ? 'OFF' : 'ON'}`, left());
-            await this.update(projector, { muted: !muted });
+            await send(session, `${COMMANDS.MUTE} ${muted ? 'OFF' : 'ON'}`);
+            this.update(projector, { muted: !muted });
             return undefined;
           }
           default:
@@ -957,38 +1057,70 @@ export class EpsonApp {
       this.noteSessionError(projector, err);
       throw this.commandError(name, err, context);
     }
+    if (outcome?.unconfirmed) {
+      // Thrown here, outside the session task: the session stays open for the
+      // answer the projector gives after its warm-up or cool-down.
+      throw new ProjectorError(ERROR_KINDS.TIMEOUT, outcome.unconfirmed, { sent: true });
+    }
+    return undefined;
+  }
+
+  /**
+   * A read made before a command: whatever goes wrong, nothing was sent.
+   * Unreachable, refused (ERR) and password errors keep their kind.
+   */
+  async readBefore(client, session, command, what, budget) {
+    try {
+      return await client.query(session, command, budget);
+    } catch (err) {
+      throw this.readError(err, what);
+    }
+  }
+
+  readError(err, what) {
+    if (!(err instanceof ProjectorError)) {
+      return err;
+    }
+    if (err.kind === ERROR_KINDS.UNREACHABLE || AUTH_KINDS.has(err.kind)) {
+      return err;
+    }
+    if (err.kind === ERROR_KINDS.REFUSED) {
+      return new ProjectorError(err.kind, `${what} not readable (ERR), nothing sent`);
+    }
+    return new ProjectorError(err.kind, `${what} not read in time, nothing sent`);
   }
 
   /**
    * A power command: the projector answers it only once warm-up or cool-down
-   * is over. Answered within the budget: done. Otherwise the command is acked
-   * as sent, its answer waited for in the background (the queue of the
-   * projector held meanwhile), then the state read again.
+   * is over. Answered within the budget: done. Otherwise Gladys is told
+   * "sent, without confirmation yet" (exactly what is known), the answer is
+   * waited for in the background (the queue of the projector held, the other
+   * commands refused at once), then the state is read again.
    */
-  async power(projector, client, session, command, wait, { left, context, hold }) {
-    context.mayHaveSent = true;
-    const answer = client.set(session, command, wait);
+  async power(projector, session, command, wait, { left, send, hold }) {
+    const answer = send(session, command, wait);
     answer.catch(() => {});
     const result = await within(answer, left() - 100);
     if (result.settled) {
       this.recheck(projector);
       return undefined;
     }
-    this.logger.info(
-      `${projectorName(projector)}: ${command} sent, the projector confirms it after ${command === 'PWR ON' ? 'warming up' : 'cooling down'}`,
-    );
+    const phase = command === 'PWR ON' ? 'warming up' : 'cooling down';
     hold(
       answer.then(
         () => this.recheck(projector, 0),
         (err) => {
-          this.logger.info(
+          this.logger.warn(
             `${projectorName(projector)}: ${command} not confirmed (${err.message})`,
           );
           this.recheck(projector, 0);
         },
       ),
+      phase,
     );
-    return undefined;
+    return {
+      unconfirmed: `Sent; ${projectorName(projector)} confirms it after ${phase} (up to ${Math.round(wait / 1000)} s): without confirmation yet`,
+    };
   }
 
   /** The error Gladys gets: "nothing sent" or "sent, without confirmation", exactly. */
@@ -1001,7 +1133,7 @@ export class EpsonApp {
         err.kind,
         context.mayHaveSent
           ? `Refused by ${name} (ERR): not available on this model or in this state`
-          : `${name} refused to read its state (ERR), nothing sent`,
+          : `${name}: ${err.message.replace(/,? nothing sent$/, '')}, nothing sent`,
       );
     }
     if (err.sent && context.mayHaveSent) {
@@ -1035,10 +1167,12 @@ export class EpsonApp {
       return;
     }
     this.created.add(projector.id);
-    this.readings.delete(projector.id);
-    // This projector only: the others keep their interval.
-    if (projector.host) {
+    // Created or updated: this projector only, and never read sooner than the
+    // interval (the last reading is published again instead).
+    if (projector.host && !this.readRecently(projector)) {
       await this.readState(projector);
+    } else {
+      await this.publishStates(projector);
     }
     await this.updateStatus();
   }
@@ -1054,12 +1188,17 @@ export class EpsonApp {
   // --- Configuration screen buttons -------------------------------------------------
 
   async findProjectors() {
-    const { failed } = await this.scan();
+    const { failed, skipped } = await this.scan();
     await this.updateStatus();
-    const found = T.found(this.projectors.map((p) => `${projectorName(p)} (${p.host || '?'})`));
-    return failed
-      ? { en: `${T.searchFailed.en} ${found.en}`, fr: `${T.searchFailed.fr} ${found.fr}` }
-      : found;
+    const parts = [];
+    if (failed) {
+      parts.push(T.searchFailed);
+    }
+    if (skipped > 0) {
+      parts.push(T.searchPartial(skipped));
+    }
+    parts.push(T.found(this.projectors.map((p) => `${projectorName(p)} (${p.host || '?'})`)));
+    return { en: parts.map((p) => p.en).join(' '), fr: parts.map((p) => p.fr).join(' ') };
   }
 
   async checkProjectors() {
@@ -1074,7 +1213,11 @@ export class EpsonApp {
       if (this.isBusy(p.id)) {
         return T.checkLine(label, undefined, T.busy);
       }
-      return T.checkLine(label, await this.readState(p));
+      // Never read sooner than the interval: a recent reading is shown as is.
+      return T.checkLine(
+        label,
+        this.readRecently(p) ? this.readings.get(p.id) : await this.readState(p),
+      );
     });
     await this.updateStatus();
     return T.check(lines);

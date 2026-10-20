@@ -32,8 +32,11 @@ up to date at the end of every milestone.
     which is not ported), and in standby;
   - whether the HELLO answer comes back to the port the core sends from (the
     library listens on 3629 itself);
-  - the answer times of `PWR ON` / `PWR OFF` (today: acked when sent if not
-    answered within the budget, the answer waited 40 s / 10 s);
+  - the answer times of `PWR ON` / `PWR OFF` (today: "sent, without
+    confirmation yet" if not answered within the budget, the answer waited
+    40 s / 10 s);
+  - whether `SNO?` answers in standby (else a projector keyed by its serial
+    cannot be commanded after an absence: "identity not confirmed");
   - the `LAMP?` answer of laser models, the `SOURCE?` / `CMODE?` codes of
     recent models, `MUTE?` in standby;
   - whether the projector closes an idle session by itself, and how many
@@ -73,9 +76,14 @@ up to date at the end of every milestone.
   read with `SNO?` (4 to 32 letters or digits, upper case) at the first
   contact, else `ip-<address>` (dots as dashes, `-<port>` when not 3629).
   Never changed afterwards (no migration from an address id to a serial id:
-  it would orphan the history). A projector keyed by its serial and found
-  again at its address after being unreachable has its serial checked: another
-  serial there clears its address (DHCP), never commanded there. Feature keys
+  it would orphan the history). (Review 1) A projector keyed by its serial
+  and not answering since the last check (unreachable, or first reading
+  after a start) has its serial read again before any publication and before
+  any command: another serial there clears its address (DHCP), never
+  commanded there; no serial at all (ERR) is "identity not confirmed":
+  nothing published, commands refused "nothing sent", checked again at each
+  poll. Risk accepted: a model that answers SNO? only when on could not be
+  turned on after an absence (milestone 2: to check). Feature keys
   are frozen: `power`, `power_on`, `standby`, `status`, `source`,
   `color_mode`, `av_mute`, `lamp_hours`. Every publication carries the full,
   fixed feature list; only the dropdown options grow (codes read on the
@@ -90,18 +98,32 @@ up to date at the end of every milestone.
   to do; warming up: refused, "nothing sent").
 - Power command answers: the projector answers `:` once the warm-up or
   cool-down is over (epson-projector waits 40 s for `PWR ON`, 10 s for
-  `PWR OFF`). Answered within the command budget: done. Otherwise the command
-  is acked to Gladys as sent (it left, and the state read just before allowed
-  it), the answer waited for in the background on the same session, the queue
-  of the projector held until then (the commands behind it are dropped at
-  their deadline, "nothing sent"; the polling skips the projector), then the
-  state is read again. ERR is reported "Refused by the projector".
+  `PWR OFF`). Answered within the command budget: done. (Review 1, I2)
+  Otherwise Gladys gets an error that says exactly what is known: "Sent;
+  <name> confirms it after warming up / cooling down (up to 40 s / 10 s):
+  without confirmation yet" (never a success without confirmation). The
+  answer is waited for in the background on the same session (the error is
+  raised outside the session task so the session stays open), the queue of
+  the projector held until then, then the state is read again; a late ERR
+  is logged as a warning and the state read again shows it. (Review 1, M4)
+  While the queue is held, any new command is refused at once, "<name> is
+  warming up / cooling down (power command in progress), nothing sent",
+  never queued. ERR within the budget is reported "Refused by the projector".
 - Commands: serialized per projector (Standby before the commands still
   waiting, never before the one running), budget 3.5 s from the Gladys
   request (queue included), the power state read first within 1.5 s; a
   command still queued at its deadline is dropped, never sent late. A
   command that may have left is answered "sent, without confirmation", one
-  that could not leave "nothing sent". Values checked before anything is
+  that could not leave "nothing sent". (Review 1, B1) Every send (power,
+  source, color mode, mute) goes through one check made just before the
+  bytes leave: Gladys' deadline passed or less than 300 ms left -> "No time
+  left for this command, nothing sent", and nothing leaves afterwards.
+  (Review 1, I1) The states read or set during a command are published
+  without being awaited: the ack never depends on Gladys taking them.
+  (Review 1, I3) The reads before a command (`SNO?`, `PWR?`, `MUTE?`) never
+  give "sent": a failure is "<what> not read in time, nothing sent" (ERR:
+  "not readable (ERR)"; unreachable and password keep their own message).
+  Values checked before anything is
   queued: a source or color mode must be a two-digit hexadecimal code listed
   in the dropdown (no CR or space can reach the projector); commands are
   written only when they match a strict pattern.
@@ -111,7 +133,13 @@ up to date at the end of every milestone.
 - Polling: every created projector at the configured interval (10 to 600 s,
   30 by default), never faster (a reconnection to Gladys republishes the last
   reading without asking the projector); `LAMP?` always, `SOURCE?`, `CMODE?`,
-  `MUTE?` only when on; a question the model refuses (ERR) is left out.
+  `MUTE?` only when on; a question the model refuses (ERR) is left out. A
+  whole reading is bounded to 6 s (review 1, M4: never a long hold of the
+  queue before a Standby). (Review 1, M5) "Check the projectors", a device
+  created or updated in Gladys never ask a projector asked less than one
+  interval ago (answered or not): the last reading is shown or published
+  again. Only the read made after a command (2 s later, or once a power
+  command is confirmed) is outside the interval.
 - Reachability: no TCP connection = "Unreachable": power 0, named in the
   status. A connection without handshake, a busy projector or an unexpected
   answer publishes nothing (logged once). The status stays "connected" (local
@@ -132,12 +160,18 @@ up to date at the end of every milestone.
   messages are skipped (not used yet).
 - Search: `udp-active-broadcast` on port 3629 with the HELLO request (16
   bytes); only the IPv4 addresses of a local network that answered with a
-  valid HELLO are asked (10/8, 172.16/12, 192.168/16, 100.64/10, 169.254/16
-  but 169.254.169.254; no .0 nor .255), 50 replies at most; the projector
-  name of the HELLO answer names the device. Typed addresses are not
+  valid HELLO are asked (10/8, 172.16/12, 192.168/16, 169.254/16 but
+  169.254.169.254; no .0 nor .255; review 1, M3: not 100.64/10, CGNAT is
+  not a local network and holds 100.100.100.200, a cloud metadata address),
+  50 replies at most; the projector name of the HELLO answer names the
+  device. (Review 1, M6) Identified 4 at a time, none started after 35 s
+  (the rest skipped, counted in the answer: "could not be checked in time"),
+  so the 60 s of the action always suffice. Typed addresses are not
   filtered. A typed address where nothing answers is asked again every
   minute.
-- Hostile input: an ESC/VP21 frame is 512 bytes at most, a handshake 16 + 8 ×
+- Hostile input: an ESC/VP21 frame is 512 bytes at most (review 1, M1:
+  checked before parsing, also when a whole long frame arrives in one
+  chunk), a handshake 16 + 8 ×
   18 bytes; parsing is linear (no backtracking regex on unbounded input);
   commands, codes, serials and ids match strict patterns; the projector and
   block tables of /data have no prototype; names are cleaned of control

@@ -21,8 +21,16 @@ the notes of the version's GitHub Release.
   (each press reads the state and sets the opposite), lamp hours.
 - Every command is decided on the power state read just before, and answered
   to Gladys within 4 seconds: "nothing sent" or "sent, without confirmation",
-  exactly. A power command is acked when sent and confirmed after the warm-up
-  or cool-down.
+  exactly. A command answered "nothing sent" never leaves afterwards, and the
+  answer never waits for Gladys to record the states. A power command not
+  confirmed in time is reported "sent, without confirmation yet", the state
+  read again once the projector confirms after the warm-up or cool-down;
+  meanwhile other commands to it are refused at once.
+- After an absence, the serial number is checked again before a command or a
+  publication: another projector at the address is never taken for yours.
+- "Check the projectors" and device updates never ask a projector sooner than
+  the refresh interval; the search answers within its 60 s, even with many
+  silent answers.
 - Optional network control password: a missing or refused password is
   persisted, tried again every 30 minutes or when the configuration is saved,
   never in a loop, and named in the integration status.
@@ -32,7 +40,7 @@ the notes of the version's GitHub Release.
 
 - Answers are bounded (512 bytes per frame, the handshake to its 8 headers),
   parsed linearly, and a request that timed out closes its session. The
-  search only asks local network addresses. The password is never logged nor
+  search only asks local network addresses (not CGNAT 100.64/10). The password is never logged nor
   written to /data.
 
 [Unreleased]: https://github.com/LM1LC3N7/gladys-epson-projector/commits/main

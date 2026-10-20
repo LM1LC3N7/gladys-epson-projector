@@ -211,19 +211,129 @@ test('Power on while cooling down: nothing sent, said so', async (t) => {
   assert.deepEqual(commands(projector), []);
 });
 
-test('a slow warm-up: acked as sent, the queue held, then the state read again', async (t) => {
+test('I2 a slow warm-up: "sent, without confirmation yet", the queue held, then read again', async (t) => {
   const { gladys, projector } = await setup(t, { projector: { powerOnDelay: 2_500 } });
   const device = await createDevice(gladys);
   const started = Date.now();
   const ack = await press(gladys, device, 'power_on');
-  assert.equal(ack.success, true, ack.error);
-  assert.ok(Date.now() - started < FAST.commandBudget + 200, 'acked within the budget');
-  // While the projector warms up, a command waits, then is dropped, never sent late.
-  const source = await press(gladys, device, 'source', 'A0');
-  assert.equal(source.success, false);
-  assert.match(source.error, /nothing sent/);
+  assert.equal(ack.success, false, 'never a success without confirmation');
+  assert.match(ack.error, /^Sent; .* confirms it after warming up .*without confirmation yet$/);
+  assert.ok(Date.now() - started < FAST.commandBudget + 200, 'answered within the budget');
+  // M4: while the projector warms up, a command is refused at once, never queued nor sent late.
+  const pressed = Date.now();
+  const standby = await press(gladys, device, 'standby');
+  assert.equal(standby.success, false);
+  assert.match(standby.error, /is warming up \(power command in progress\), nothing sent/);
+  assert.ok(Date.now() - pressed < 200, 'refused without waiting');
   await waitFor(() => gladys.fake.lastState(id('power')) === 1, 'power 1 after the warm-up');
   assert.deepEqual(commands(projector), ['PWR ON']);
+});
+
+/** Makes every publication of states slow (a loaded Gladys). */
+function slowPublications(gladys, ms) {
+  const original = gladys.publishChangedStates.bind(gladys);
+  gladys.publishChangedStates = async (states) => {
+    await new Promise((resolve) => setTimeout(resolve, ms));
+    return original(states);
+  };
+}
+
+test('B1 (S1) a publication slower than the budget: the ack and the command agree', async (t) => {
+  const { gladys, projector } = await setup(t);
+  const device = await createDevice(gladys);
+  slowPublications(gladys, 1_500);
+  const ack = await press(gladys, device, 'power_on');
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  if (ack.success) {
+    assert.deepEqual(commands(projector), ['PWR ON']);
+  } else {
+    assert.match(ack.error, /nothing sent/);
+    assert.deepEqual(commands(projector), [], 'never sent after "nothing sent"');
+  }
+});
+
+test('B1 a send with no time left is refused before the bytes leave', async (t) => {
+  for (const [options, key] of [
+    [{}, 'power_on'],
+    [{ power: '01' }, 'standby'],
+    [{ power: '01' }, 'av_mute'],
+  ]) {
+    const { gladys, projector } = await setup(t, {
+      projector: options,
+      timings: { minSendTime: 5_000 },
+    });
+    const device = await createDevice(gladys);
+    const ack = await press(gladys, device, key);
+    assert.equal(ack.success, false, key);
+    assert.match(ack.error, /No time left for this command, nothing sent/, key);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.deepEqual(commands(projector), [], key);
+  }
+});
+
+test('I1 the ack never waits for the publication of the states', async (t) => {
+  const { gladys, projector } = await setup(t, { projector: { power: '01' } });
+  const device = await createDevice(gladys);
+  slowPublications(gladys, 900);
+  const started = Date.now();
+  const ack = await press(gladys, device, 'source', 'A0');
+  assert.equal(ack.success, true, ack.error);
+  assert.ok(Date.now() - started < 500, `acked in ${Date.now() - started} ms`);
+  assert.deepEqual(commands(projector), ['SOURCE A0']);
+  await waitFor(() => gladys.fake.lastState(id('source')) === 'A0', 'the source published later');
+});
+
+test('I3 a pre-read not answered: "not read in time, nothing sent", never "Sent"', async (t) => {
+  const { gladys, projector } = await setup(t);
+  const device = await createDevice(gladys);
+  projector.state.noAnswer.add('PWR?');
+  const ack = await press(gladys, device, 'power_on');
+  assert.equal(ack.success, false);
+  assert.match(ack.error, /Power state not read in time, nothing sent$/);
+  assert.doesNotMatch(ack.error, /Sent/);
+  assert.deepEqual(commands(projector), []);
+});
+
+test('M2 another projector without serial number at the address is never taken for this one', async (t) => {
+  const { gladys, app, projector } = await setup(t, { projector: { power: '04' } });
+  const device = await createDevice(gladys);
+  app.readings.set(SERIAL, { reachable: false });
+  projector.state.serial = null;
+  projector.state.power = '01';
+  await new Promise((resolve) => setTimeout(resolve, FAST.idleClose + 50));
+  await app.poll({ force: true });
+  assert.equal(gladys.fake.lastState(id('power')), 0, 'nothing published for the other one');
+  const ack = await press(gladys, device, 'standby');
+  assert.equal(ack.success, false);
+  assert.match(ack.error, /identity not confirmed .*nothing sent/);
+  assert.deepEqual(commands(projector), []);
+  // The right serial again: back to normal.
+  projector.state.serial = SERIAL;
+  await app.poll({ force: true });
+  assert.equal(gladys.fake.lastState(id('power')), 1);
+});
+
+test('M2 another serial at the address before a command: the address is forgotten', async (t) => {
+  const { gladys, app, projector } = await setup(t, { projector: { power: '01' } });
+  const device = await createDevice(gladys);
+  app.readings.set(SERIAL, { reachable: false });
+  projector.state.serial = 'OTHER1234';
+  const ack = await press(gladys, device, 'standby');
+  assert.equal(ack.success, false);
+  assert.match(ack.error, /another projector answers at its address, nothing sent/);
+  assert.equal(app.data.projectors[SERIAL].host, '');
+  assert.deepEqual(commands(projector), []);
+});
+
+test('M5 "Check" and a device update never read sooner than the interval', async (t) => {
+  const { gladys, projector } = await setup(t);
+  const device = await createDevice(gladys);
+  const asked = () => projector.received.filter((l) => l === 'PWR?').length;
+  const before = asked();
+  const check = await gladys.fake.action('check_projectors');
+  assert.match(check.data.message.en, /Standby, lamp 1234 h/);
+  await gladys.fake.deviceUpdated(device);
+  assert.equal(asked(), before);
 });
 
 test('Standby: sent only when on, goes before the commands waiting', async (t) => {
@@ -464,7 +574,51 @@ test('isLanAddress', () => {
     '169.254.169.254',
     '224.0.0.1',
     'example.com',
+    // M3: CGNAT is not a local network, and holds a cloud metadata address.
+    '100.64.0.1',
+    '100.100.100.200',
   ]) {
     assert.ok(!isLanAddress(host), host);
   }
+});
+
+test('M6 the search answers in time: identifications 4 at a time, the rest skipped and said', async (t) => {
+  const silent = await startFakeProjector({ silent: true });
+  t.after(() => silent.close());
+  const hello = helloReply('X').toString('base64');
+  const connections = [];
+  const connect = () => {
+    connections.push(Date.now());
+    return netConnect({ host: '127.0.0.1', port: silent.port });
+  };
+  const gladys = createFakeGladys({
+    selector: SELECTOR,
+    config: { addresses: '' },
+    scanResults: {
+      'udp-active-broadcast': Array.from({ length: 12 }, (_, i) => ({
+        source_ip: `192.168.1.${10 + i}`,
+        source_port: 3629,
+        payload_base64: hello,
+      })),
+    },
+  });
+  const app = new EpsonApp({
+    gladys,
+    store: new MemoryStore(),
+    timers,
+    timings: { ...FAST, connectTimeout: 200, scanDeadline: 300 },
+    connect,
+    logger: { debug() {}, info() {}, warn() {}, error() {} },
+  });
+  registerHandlers(gladys, app);
+  t.after(() => app.stop());
+  await gladys.connect();
+  const started = Date.now();
+  const ack = await gladys.fake.action('find_projectors');
+  assert.ok(Date.now() - started < 1_500, `answered in ${Date.now() - started} ms`);
+  // Each silent answer takes connectTimeout (200 ms): 4 at once, then the next 4.
+  const first = connections.filter((at) => at - connections[0] < 150).length;
+  assert.equal(first, 4, `${first} at once`);
+  assert.ok(connections.length < 12, `${connections.length} started`);
+  assert.match(ack.data.message.en, /answer\(s\) of the search could not be checked in time/);
 });

@@ -65,13 +65,25 @@ it:
   sent and the reason is given.
 - **Standby** is sent only when the projector is on.
 - The projector confirms a power command only once its warm-up or cool-down is
-  over (up to 40 s): Gladys gets the answer as soon as the command is sent,
-  and the state is read again once the projector confirms. Meanwhile, the
-  other commands to that projector are refused, "nothing sent".
+  over (up to 40 s). When that takes longer than Gladys waits, Gladys shows
+  "Sent; … confirms it after warming up (up to 40 s): without confirmation
+  yet" (an error message in Gladys, though the command left), and the Power
+  and Status states are updated once the projector confirms. Meanwhile, any
+  other command to that projector is refused at once, "nothing sent".
+- After an absence (unreachable, or a restart of the integration), the serial
+  number of the projector is read again before a command or a publication: a
+  projector that answers another serial, or none, at that address is never
+  taken for yours ("identity not confirmed, nothing sent").
 
-Every command is answered within 4 seconds (Gladys waits 5 seconds). A
-command that left for the projector without confirmation is reported "sent,
-without confirmation"; one that could not leave is reported "nothing sent".
+Every command is answered within 4 seconds (Gladys waits 5 seconds), and never
+waits for Gladys to record the states. A command that left for the projector
+without confirmation is reported "sent, without confirmation"; one that could
+not leave is reported "nothing sent", and is then never sent later. A state
+that could not be read before a command gives "… not read in time, nothing
+sent".
+
+"Check the projectors", and an update of the device in Gladys, never ask a
+projector sooner than the refresh interval: the last reading is shown.
 
 ## Password
 

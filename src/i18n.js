@@ -59,6 +59,11 @@ export const T = {
     'The network search through Gladys failed (or was asked too soon): the typed addresses were checked.',
     'La recherche réseau par Gladys a échoué (ou a été demandée trop tôt) : les adresses saisies ont été vérifiées.',
   ),
+  searchPartial: (count) =>
+    both(
+      `${count} answer(s) of the search could not be checked in time: use the button again, or type their addresses.`,
+      `${count} réponse(s) de la recherche n'ont pas pu être vérifiées à temps : relancez le bouton, ou saisissez leurs adresses.`,
+    ),
   noProjector: both(
     'No projector known yet: type their address in the configuration or use "Find the projectors".',
     "Aucun vidéoprojecteur connu pour l'instant : saisissez leur adresse dans la configuration ou utilisez « Chercher les vidéoprojecteurs ».",

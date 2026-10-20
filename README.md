@@ -40,10 +40,14 @@ Gladys ⇄ SDK ⇄ src/handlers.js ⇄ src/app.js (EpsonApp)
 - **Commands**: serialized per projector, each within a 3.5 s budget (Gladys
   acks in 5 s), decided on the power state read just before. Power on only
   from standby, Standby only when on; their answer comes after the warm-up or
-  cool-down (up to 40 s): acked when sent, the queue held until the answer,
-  the state read again. A/V mute reads the state and sends the explicit
-  opposite. A message that may have reached the projector is reported "sent,
-  without confirmation".
+  cool-down (up to 40 s): when not in the budget, reported "sent, without
+  confirmation yet", the queue held until the answer (other commands refused
+  at once), the state read again. A/V mute reads the state and sends the
+  explicit opposite. Every send is checked against the deadline just before
+  it leaves (never sent after "nothing sent"), and the ack never waits for
+  the publication of the states. A message that may have reached the
+  projector is reported "sent, without confirmation". After an absence the
+  serial number is read again before any command or publication.
 - **Password**: missing or refused, a block persisted per address in /data,
   tried again every 30 minutes or when the configuration is saved, never in a
   loop. Never logged, never in /data.

@@ -111,3 +111,12 @@ test('an answer longer than the bound closes the session', async (t) => {
   await assert.rejects(pending, { kind: ERROR_KINDS.PROTOCOL });
   assert.equal(session.open, false);
 });
+
+test('M1 a long frame arriving whole, colon included, is refused before parsing', async (t) => {
+  const projector = await fake(t, { noAnswer: ['LAMP?'] });
+  const session = await open(projector.port);
+  const pending = session.request('LAMP?', 1_000);
+  projector.push(`LAMP=${'1'.repeat(60_000)}\r:`);
+  await assert.rejects(pending, { kind: ERROR_KINDS.PROTOCOL, message: 'Answer too long' });
+  assert.equal(session.open, false);
+});

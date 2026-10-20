@@ -68,16 +68,29 @@ d'après lui :
   anormale), rien n'est envoyé et la raison est donnée.
 - **Veille** n'est envoyé que lorsque le vidéoprojecteur est allumé.
 - Le vidéoprojecteur ne confirme une commande de marche qu'à la fin de son
-  préchauffage ou de son refroidissement (jusqu'à 40 s) : Gladys reçoit la
-  réponse dès que la commande est envoyée, et l'état est relu dès la
-  confirmation. En attendant, les autres commandes vers ce vidéoprojecteur
-  sont refusées, « rien n'a été envoyé ».
+  préchauffage ou de son refroidissement (jusqu'à 40 s). Quand c'est plus long
+  que ce qu'attend Gladys, Gladys affiche « Sent; … confirms it after warming
+  up (up to 40 s): without confirmation yet » (envoyée, pas encore confirmée :
+  un message d'erreur dans Gladys, bien que la commande soit partie), et les
+  états Marche et État sont mis à jour dès la confirmation. En attendant, toute
+  autre commande vers ce vidéoprojecteur est refusée aussitôt, « rien n'a été
+  envoyé ».
+- Après une absence (injoignable, ou redémarrage de l'intégration), le numéro
+  de série du vidéoprojecteur est relu avant une commande ou une publication :
+  un vidéoprojecteur qui répond un autre numéro, ou aucun, à cette adresse
+  n'est jamais pris pour le vôtre (« identity not confirmed, nothing sent »).
 
 Chaque commande reçoit une réponse en moins de 4 secondes (Gladys attend
-5 secondes). Une commande partie vers le vidéoprojecteur sans confirmation est
-signalée « envoyée, sans confirmation » ; une commande qui n'a pas pu partir
-est signalée « rien n'a été envoyé » (en anglais dans Gladys : « nothing
-sent »).
+5 secondes), sans jamais attendre que Gladys enregistre les états. Une
+commande partie vers le vidéoprojecteur sans confirmation est signalée
+« envoyée, sans confirmation » ; une commande qui n'a pas pu partir est
+signalée « rien n'a été envoyé » (en anglais dans Gladys : « nothing sent »),
+et n'est alors jamais envoyée plus tard. Un état qui n'a pas pu être lu avant
+une commande donne « … not read in time, nothing sent ».
+
+« Vérifier les vidéoprojecteurs », et une mise à jour de l'appareil dans
+Gladys, n'interrogent jamais un vidéoprojecteur plus tôt que l'intervalle de
+rafraîchissement : la dernière lecture est affichée.
 
 ## Mot de passe
 

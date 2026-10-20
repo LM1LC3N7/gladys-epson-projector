@@ -29,6 +29,13 @@ export const TIMINGS = Object.freeze({
   connectTimeout: 3_000,
   /** One ESC/VP21 question (the timeout of epson-projector is 3 s). */
   requestTimeout: 3_000,
+  /**
+   * A whole reading (connection and up to six questions): bounded so that a
+   * slow projector never holds its queue long before a Standby.
+   */
+  readBudget: 6_000,
+  /** A command is sent only with at least this much of its budget left. */
+  minSendTime: 300,
   /** A session unused this long is closed. */
   idleClose: 10_000,
   /**
@@ -39,9 +46,10 @@ export const TIMINGS = Object.freeze({
   commandBudget: 3_500,
   /**
    * The projector answers a power command once warm-up or cool-down is over
-   * (epson-projector waits 40 s for PWR ON, 10 s for PWR OFF): the command is
-   * acked when sent, the answer waited for in the background, the queue of
-   * the projector held meanwhile.
+   * (epson-projector waits 40 s for PWR ON, 10 s for PWR OFF): not answered
+   * in the budget, Gladys gets "sent, without confirmation yet", the answer
+   * is waited for in the background, the queue of the projector held
+   * meanwhile (other commands refused at once).
    */
   powerOnWait: 40_000,
   powerOffWait: 10_000,
@@ -55,6 +63,12 @@ export const TIMINGS = Object.freeze({
   persistDelay: 1_000,
   /** Listening time of the HELLO search. */
   scanSeconds: 3,
+  /**
+   * "Find the projectors" has 60 s: the answers are identified 4 at a time,
+   * none started after `scanDeadline` (the rest is skipped and said so).
+   */
+  scanConcurrency: 4,
+  scanDeadline: 35_000,
   /** Projectors asked at once by "Check the projectors". */
   checkConcurrency: 4,
 });
