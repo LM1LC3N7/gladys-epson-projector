@@ -1,6 +1,6 @@
 {
   "name": "gladys-epson-projector",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Gladys Assistant external integration for Epson projectors (power on, standby, source, color mode, A/V mute, lamp hours), over the local ESC/VP.net protocol (TCP 3629). Unofficial, not affiliated with Epson.",
   "type": "module",
