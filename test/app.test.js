@@ -313,6 +313,52 @@ test('M2 another projector without serial number at the address is never taken f
   assert.equal(gladys.fake.lastState(id('power')), 1);
 });
 
+test('S9 SNO? answered ERR in standby after a restart: published, Power on sent, checked again when on', async (t) => {
+  const { gladys, app, projector } = await setup(t, { projector: { power: '01' } });
+  const device = await createDevice(gladys);
+  projector.state.power = '04';
+  projector.state.serial = null; // SNO? -> ERR in standby, as many models
+  app.readings.clear(); // what a restart leaves
+  app.lastPoll.clear();
+  await new Promise((resolve) => setTimeout(resolve, FAST.idleClose + 50));
+  await app.poll({ force: true });
+  assert.equal(gladys.fake.lastState(id('status')), 'Standby', 'the state is published');
+  assert.equal(gladys.fake.lastState(id('power')), 0);
+  await app.updateStatus();
+  assert.deepEqual(gladys.fake.connectionStatus, { connected: true });
+  assert.equal(app.identityPending.has(SERIAL), true, 'to check again once on');
+  const ack = await press(gladys, device, 'power_on');
+  assert.equal(ack.success, true, ack.error);
+  assert.deepEqual(commands(projector), ['PWR ON']);
+  // Once on, the serial must answer: here another projector answers another one.
+  projector.state.serial = 'OTHER1234';
+  await app.poll({ force: true });
+  assert.equal(app.data.projectors[SERIAL].host, '', 'address forgotten');
+  assert.equal(gladys.fake.lastState(id('status')), 'Unreachable');
+});
+
+test('S9 on and no serial number: "Identity not confirmed" in the status feature and the integration status', async (t) => {
+  const { gladys, app, projector } = await setup(t, { projector: { power: '01' } });
+  const device = await createDevice(gladys);
+  projector.state.serial = null;
+  app.readings.clear();
+  app.lastPoll.clear();
+  await new Promise((resolve) => setTimeout(resolve, FAST.idleClose + 50));
+  await app.poll({ force: true });
+  assert.equal(gladys.fake.lastState(id('status')), 'Identity not confirmed');
+  await waitFor(
+    () => /Identity not confirmed/.test(gladys.fake.connectionStatus?.message?.en ?? ''),
+    'the integration status',
+  );
+  const ack = await press(gladys, device, 'standby');
+  assert.match(ack.error, /identity not confirmed .*nothing sent/);
+  assert.deepEqual(commands(projector), []);
+  projector.state.serial = SERIAL;
+  await app.poll({ force: true });
+  assert.equal(gladys.fake.lastState(id('status')), 'On');
+  await waitFor(() => gladys.fake.connectionStatus?.message === undefined, 'status cleared');
+});
+
 test('M2 another serial at the address before a command: the address is forgotten', async (t) => {
   const { gladys, app, projector } = await setup(t, { projector: { power: '01' } });
   const device = await createDevice(gladys);

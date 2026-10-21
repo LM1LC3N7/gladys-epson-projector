@@ -72,8 +72,12 @@ it:
   other command to that projector is refused at once, "nothing sent".
 - After an absence (unreachable, or a restart of the integration), the serial
   number of the projector is read again before a command or a publication: a
-  projector that answers another serial, or none, at that address is never
-  taken for yours ("identity not confirmed, nothing sent").
+  projector that answers another serial at that address is never taken for
+  yours. Many models give no serial number in standby: that is accepted
+  (state shown, Power on works), and checked again once the projector is on.
+  A projector that is on and gives no serial number shows "Identity not
+  confirmed" in its Status and in the integration status, and receives
+  nothing ("identity not confirmed, nothing sent") until it answers yours.
 
 Every command is answered within 4 seconds (Gladys waits 5 seconds), and never
 waits for Gladys to record the states. A command that left for the projector

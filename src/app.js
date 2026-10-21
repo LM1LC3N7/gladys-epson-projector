@@ -118,6 +118,10 @@ export class EpsonApp {
     this.queues = new Map();
     /** address key -> { at, kind } of the last probe of a typed address */
     this.probes = new Map();
+    /** ids whose serial number is to be read again (standby answered ERR to SNO?) */
+    this.identityPending = new Set();
+    /** ids answering no serial number while on: maybe another projector */
+    this.identityUnconfirmed = new Set();
     /** ids of the devices created in Gladys */
     this.created = new Set();
     this.backgroundTimers = new Set();
@@ -711,17 +715,22 @@ export class EpsonApp {
             throw err;
           }
         };
-        if (projector.serial && !wasReachable) {
-          // Back online (or first reading of this run): make sure the address
-          // still belongs to this projector before anything is published.
-          const identity = await this.checkIdentity(projector, client, session, left());
-          if (identity !== 'ok') {
-            return { identity };
-          }
-        }
         const power = powerState(await client.query(session, COMMANDS.POWER, left()));
         if (!power) {
           throw new ProjectorError(ERROR_KINDS.PROTOCOL, 'Unexpected power state');
+        }
+        if (this.needsIdentity(projector, wasReachable)) {
+          // Back online (or first reading of this run): the address must still
+          // be this projector's. PWR? first: only a projector that is on must
+          // answer its serial number (many models answer ERR in standby).
+          const identity = this.settleIdentity(
+            projector,
+            power,
+            await this.checkIdentity(projector, client, session, left()),
+          );
+          if (identity !== 'ok') {
+            return { identity };
+          }
         }
         const result = { reachable: true, power };
         if (power.code === '01') {
@@ -734,17 +743,20 @@ export class EpsonApp {
       });
       this.clearAuthBlock(projector);
       if (reading.identity === 'moved') {
+        this.identityPending.delete(projector.id);
         this.forgetAddress(projector);
         return { reachable: false };
       }
       if (reading.identity === 'unconfirmed') {
-        // No serial number answered: maybe another projector. Nothing is
-        // published nor commanded until it gives this projector's serial again.
+        // On, and no serial number: maybe another projector. Only the status
+        // says so; nothing else is published nor commanded until it gives this
+        // projector's serial again.
         this.warnOnce(
           `identity:${projector.id}`,
-          `${projectorName(projector)}: no serial number at ${projector.host}, identity not confirmed`,
+          `${projectorName(projector)}: no serial number at ${projector.host} while on, identity not confirmed`,
         );
-        return undefined;
+        this.updateStatus().catch(() => {});
+        return { reachable: true, identityUnconfirmed: true };
       }
       this.noteCodes(projector, reading);
       return reading;
@@ -806,6 +818,7 @@ export class EpsonApp {
     this.readings.set(projector.id, {
       ...(previous?.reachable ? previous : {}),
       reachable: true,
+      identityUnconfirmed: undefined,
       ...values,
     });
     this.publishStates(projector).catch(() => {});
@@ -835,6 +848,42 @@ export class EpsonApp {
       return 'unconfirmed';
     }
     return serial === projector.serial ? 'ok' : 'moved';
+  }
+
+  /**
+   * Whether the serial number must be read again: a projector keyed by its
+   * serial, not confirmed since the start of this run or its last absence.
+   */
+  needsIdentity(projector, wasReachable = this.readings.get(projector.id)?.reachable === true) {
+    return Boolean(projector.serial) && (this.identityPending.has(projector.id) || !wasReachable);
+  }
+
+  /**
+   * What an identity check means for the power state read with it. Another
+   * serial: `moved`, whatever the state. No serial while on (`01`, where every
+   * model answers it): `unconfirmed`. No serial out of `01` (standby, warm-up,
+   * cool-down: many models answer ERR then) is no contradiction: `ok`, the
+   * check made again at the next reading or command.
+   */
+  settleIdentity(projector, power, identity) {
+    const wasUnconfirmed = this.identityUnconfirmed.has(projector.id);
+    let result = identity;
+    if (identity === 'unconfirmed') {
+      this.identityPending.add(projector.id);
+      if (power.code === '01') {
+        this.identityUnconfirmed.add(projector.id);
+      } else {
+        this.identityUnconfirmed.delete(projector.id);
+        result = 'ok';
+      }
+    } else {
+      this.identityPending.delete(projector.id);
+      this.identityUnconfirmed.delete(projector.id);
+    }
+    if (wasUnconfirmed !== this.identityUnconfirmed.has(projector.id)) {
+      this.updateStatus().catch(() => {});
+    }
+    return result;
   }
 
   /** The address now answers with another serial: it is no longer this projector's. */
@@ -966,8 +1015,12 @@ export class EpsonApp {
     let outcome;
     try {
       outcome = await client.run(left(), async (session) => {
-        if (projector.serial && this.readings.get(projector.id)?.reachable !== true) {
-          // Not answered since the last check (or since the start): the
+        const power = powerState(await readBefore(session, COMMANDS.POWER, 'Power state'));
+        if (!power) {
+          throw new ProjectorError(ERROR_KINDS.PROTOCOL, 'Unexpected power state, nothing sent');
+        }
+        if (this.needsIdentity(projector)) {
+          // Not confirmed since the last absence (or since the start): the
           // address must still be this projector's before anything is sent.
           let identity;
           try {
@@ -980,20 +1033,20 @@ export class EpsonApp {
           } catch (err) {
             throw this.readError(err, 'Serial number');
           }
+          identity = this.settleIdentity(projector, power, identity);
           if (identity === 'moved') {
             this.forgetAddress(projector);
             this.readings.set(projector.id, { reachable: false });
             throw new Error(`${name}: another projector answers at its address, nothing sent`);
           }
           if (identity === 'unconfirmed') {
+            this.readings.set(projector.id, { reachable: true, identityUnconfirmed: true });
+            this.publishStates(projector).catch(() => {});
+            this.updateStatus().catch(() => {});
             throw new Error(
-              `${name}: identity not confirmed (no serial number answered), nothing sent`,
+              `${name}: identity not confirmed (on, but no serial number answered), nothing sent`,
             );
           }
-        }
-        const power = powerState(await readBefore(session, COMMANDS.POWER, 'Power state'));
-        if (!power) {
-          throw new ProjectorError(ERROR_KINDS.PROTOCOL, 'Unexpected power state, nothing sent');
         }
         this.update(projector, { power });
         switch (key) {
@@ -1278,6 +1331,12 @@ export class EpsonApp {
       .map(projectorName);
     if (off.length > 0) {
       notes.push(T.unreachable(off));
+    }
+    const unconfirmed = this.projectors
+      .filter((p) => this.created.has(p.id) && p.host && this.identityUnconfirmed.has(p.id))
+      .map(projectorName);
+    if (unconfirmed.length > 0) {
+      notes.push(T.identityUnconfirmed(unconfirmed));
     }
     // A local integration: "connected" means running, unless a password stops a projector.
     const status = { connected: required.length + refused.length === 0 };

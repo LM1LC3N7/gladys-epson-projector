@@ -32,6 +32,9 @@ export const POWER_STATES = Object.freeze({
 /** Shown when the projector does not answer at all. */
 export const UNREACHABLE_LABEL = 'Unreachable';
 
+/** Shown when a projector that is on answers no serial number (maybe another one). */
+export const IDENTITY_LABEL = 'Identity not confirmed';
+
 /**
  * `PWR?` answer -> its entry. A code not listed is shown as is, its power
  * unknown (never published, no button acts on it); not a code: undefined.

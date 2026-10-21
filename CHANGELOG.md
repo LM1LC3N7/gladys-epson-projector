@@ -27,7 +27,10 @@ the notes of the version's GitHub Release.
   read again once the projector confirms after the warm-up or cool-down;
   meanwhile other commands to it are refused at once.
 - After an absence, the serial number is checked again before a command or a
-  publication: another projector at the address is never taken for yours.
+  publication: another projector at the address is never taken for yours. A
+  projector in standby that gives no serial number is still shown and can be
+  turned on (checked again once on); one that is on without a serial number
+  shows "Identity not confirmed" and receives nothing.
 - "Check the projectors" and device updates never ask a projector sooner than
   the refresh interval; the search answers within its 60 s, even with many
   silent answers.

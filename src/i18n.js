@@ -40,6 +40,11 @@ export const T = {
       `Unreachable (off, standby without network, or wrong address): ${list(names)}.`,
       `Injoignables (éteints, en veille sans réseau, ou mauvaise adresse) : ${list(names)}.`,
     ),
+  identityUnconfirmed: (names) =>
+    both(
+      `Identity not confirmed (on, but no serial number answered: maybe another projector at its address), nothing sent to: ${list(names)}. Checked again at each refresh.`,
+      `Identité non confirmée (allumé, mais aucun numéro de série répondu : peut-être un autre vidéoprojecteur à son adresse), rien n'est envoyé à : ${list(names)}. Revérifié à chaque rafraîchissement.`,
+    ),
   addressUnknown: (names) =>
     both(
       `Another projector now answers at the address of: ${list(names)}. Type its new address or use "Find the projectors".`,
@@ -78,6 +83,12 @@ export const T = {
     }
     if (reading.reachable === false) {
       return both(`${label}: unreachable`, `${label} : injoignable`);
+    }
+    if (reading.identityUnconfirmed) {
+      return both(
+        `${label}: identity not confirmed (no serial number while on)`,
+        `${label} : identité non confirmée (pas de numéro de série une fois allumé)`,
+      );
     }
     const en = [reading.power?.label ?? 'state unknown'];
     const fr = [FR_LABELS[reading.power?.label] ?? 'état inconnu'];

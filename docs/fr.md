@@ -77,8 +77,13 @@ d'après lui :
   envoyé ».
 - Après une absence (injoignable, ou redémarrage de l'intégration), le numéro
   de série du vidéoprojecteur est relu avant une commande ou une publication :
-  un vidéoprojecteur qui répond un autre numéro, ou aucun, à cette adresse
-  n'est jamais pris pour le vôtre (« identity not confirmed, nothing sent »).
+  un vidéoprojecteur qui répond un autre numéro à cette adresse n'est jamais
+  pris pour le vôtre. Beaucoup de modèles ne donnent pas leur numéro de série
+  en veille : c'est accepté (état affiché, Allumer fonctionne), et revérifié
+  une fois le vidéoprojecteur allumé. Un vidéoprojecteur allumé qui ne donne
+  pas de numéro de série affiche « Identity not confirmed » dans son État et
+  dans le statut de l'intégration, et ne reçoit rien (« identity not
+  confirmed, nothing sent ») tant qu'il ne répond pas le vôtre.
 
 Chaque commande reçoit une réponse en moins de 4 secondes (Gladys attend
 5 secondes), sans jamais attendre que Gladys enregistre les états. Une

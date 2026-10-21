@@ -17,7 +17,7 @@ import {
   DEVICE_FEATURE_UNITS as U,
 } from '@gladysassistant/integration-sdk';
 import { DEVICE_TYPE, FEATURES } from './constants.js';
-import { COLOR_MODES, SOURCES } from './escvp/codes.js';
+import { COLOR_MODES, IDENTITY_LABEL, SOURCES } from './escvp/codes.js';
 
 /** The feature definitions, by frozen key, in their frozen order. */
 export const FEATURE_SPECS = Object.freeze({
@@ -148,6 +148,10 @@ export function stateList(gladys, projector, reading, unreachableLabel) {
       { device_feature_external_id: id(FEATURES.POWER), state: 0 },
       { device_feature_external_id: id(FEATURES.STATUS), text: unreachableLabel },
     ];
+  }
+  if (reading.identityUnconfirmed) {
+    // Maybe another projector at this address: only the status says so.
+    return [{ device_feature_external_id: id(FEATURES.STATUS), text: IDENTITY_LABEL }];
   }
   const states = [];
   if (reading.power) {

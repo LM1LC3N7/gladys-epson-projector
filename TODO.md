@@ -35,8 +35,8 @@ up to date at the end of every milestone.
   - the answer times of `PWR ON` / `PWR OFF` (today: "sent, without
     confirmation yet" if not answered within the budget, the answer waited
     40 s / 10 s);
-  - whether `SNO?` answers in standby (else a projector keyed by its serial
-    cannot be commanded after an absence: "identity not confirmed");
+  - whether `SNO?` answers when on on every model (no serial while on is
+    "identity not confirmed": nothing sent);
   - the `LAMP?` answer of laser models, the `SOURCE?` / `CMODE?` codes of
     recent models, `MUTE?` in standby;
   - whether the projector closes an idle session by itself, and how many
@@ -79,11 +79,17 @@ up to date at the end of every milestone.
   it would orphan the history). (Review 1) A projector keyed by its serial
   and not answering since the last check (unreachable, or first reading
   after a start) has its serial read again before any publication and before
-  any command: another serial there clears its address (DHCP), never
-  commanded there; no serial at all (ERR) is "identity not confirmed":
-  nothing published, commands refused "nothing sent", checked again at each
-  poll. Risk accepted: a model that answers SNO? only when on could not be
-  turned on after an absence (milestone 2: to check). Feature keys
+  any command, `PWR?` first, then `SNO?`. (Approval 2026-10-21, S9) Another
+  serial clears its address (DHCP) in every power state, never commanded
+  there. No serial (ERR) while on (`01`, where every model answers it) is
+  "identity not confirmed": only the status feature shows "Identity not
+  confirmed", the integration status names the projector, commands are
+  refused "nothing sent", checked again at each poll. No serial out of `01`
+  (standby, warm-up, cool-down: many models, Home Assistant's integration
+  reads the serial only from a projector on) is no contradiction: the state
+  is published, Power on allowed, and the serial checked again at the next
+  reading or command (`identityPending`, in memory), so the first reading on
+  decides. Feature keys
   are frozen: `power`, `power_on`, `standby`, `status`, `source`,
   `color_mode`, `av_mute`, `lamp_hours`. Every publication carries the full,
   fixed feature list; only the dropdown options grow (codes read on the
