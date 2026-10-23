@@ -10,6 +10,8 @@ the notes of the version's GitHub Release.
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-10-23
+
 ## [0.1.1] - 2026-10-21
 
 ### Added
@@ -48,5 +50,6 @@ the notes of the version's GitHub Release.
   search only asks local network addresses (not CGNAT 100.64/10). The password is never logged nor
   written to /data.
 
-[Unreleased]: https://github.com/LM1LC3N7/gladys-epson-projector/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/LM1LC3N7/gladys-epson-projector/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/LM1LC3N7/gladys-epson-projector/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/LM1LC3N7/gladys-epson-projector/releases/tag/v0.1.1
