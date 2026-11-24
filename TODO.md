@@ -187,3 +187,7 @@ up to date at the end of every milestone.
   `television/volume-mute`, `duration/integer` with the unit `hours` (listed
   by `DEVICE_FEATURE_UNITS_BY_CATEGORY` for `duration`). Store category
   `multimedia`.
+
+## Next patch
+
+- Migration review minors: see `_lots/migration-reviews/w13-gladys-epson-projector-r1.md`.
