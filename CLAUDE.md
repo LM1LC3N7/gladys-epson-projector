@@ -9,7 +9,8 @@ A Gladys Assistant **external integration** for Epson projectors, over
 ESC/VP.net (the network control protocol Epson publishes, TCP port 3629): a
 Node.js service (Node 22+, ESM, no build step) that runs in its own sandboxed
 Docker container and talks to Gladys through
-[`@gladysassistant/integration-sdk`](https://github.com/GladysAssistant/integration-sdk-js),
+[`@gladysassistant/integration-sdk`](https://github.com/GladysAssistant/integration-sdk-js)
+(v0.16),
 its only runtime dependency. It started from the official JavaScript template;
 the protocol logic is ported from the `epson-projector` Python library (MIT,
 see `THIRD_PARTY_NOTICES.md`). Only ESC/VP.net is used: never the HTTP mode
@@ -20,7 +21,7 @@ recorded in `TODO.md`.
 
 ```bash
 npm install
-npm test                                  # node --test, the built-in runner
+npm test                                  # node --test --test-timeout=60000
 node --test test/app.test.js              # one file
 node --test --test-name-pattern "Power"   # tests whose name matches
 npm run cover                             # regenerates cover.png
@@ -56,6 +57,12 @@ test/                             node --test, fake Gladys + fake projector (tes
 
 ## Rules
 
+- **Features follow the core model.** Every feature has a non-empty `name`, a
+  numeric `min` and `max` (0/0 for text), boolean `read_only` and
+  `has_feedback`: Gladys refuses it otherwise, and the SDK's fake Gladys
+  (0.16.1) too; `test/helpers/coreFeature.js` checks every device kind.
+  Devices carry `should_poll: false` (Gladys 5.3 polls a device with
+  `poll_frequency` unless it says so).
 - **External ids are forever.** Built with `gladys.externalIds('epson', id)`,
   `id` being the serial number (`SNO?`), or the address when the projector
   gives none (see `TODO.md`). Gladys keys devices, their history, scenes and

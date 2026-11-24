@@ -9,6 +9,9 @@ import { readFileSync } from 'node:fs';
 import { DEFAULT_CONFIG } from '../src/config.js';
 import { ACTIONS, POLL_INTERVAL } from '../src/constants.js';
 import { ESCVPNET_PORT } from '../src/escvp/protocol.js';
+import { createFakeGladys } from '@gladysassistant/integration-sdk/testing';
+import { FEATURE_SPECS, buildDevice } from '../src/model.js';
+import { assertCoreDevice } from './helpers/coreFeature.js';
 
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 const manifest = JSON.parse(read('gladys-assistant-integration.json'));
@@ -148,4 +151,18 @@ test('the image ships the license and the third-party notices', () => {
   const license = read('LICENSE');
   assert.match(license, /Apache License/);
   assert.match(license, /Copyright \[yyyy\] \[name of copyright owner\]/, 'no personal name');
+});
+
+test('every feature has a numeric min and max and the other core fields', () => {
+  const gladys = createFakeGladys({ selector: 'epson' });
+  const projectors = [
+    { id: 'SN1', host: '192.168.1.30', name: 'Living room' },
+    // Codes seen on the projector that the known lists lack: extra options.
+    { id: '192.168.1.31', host: '192.168.1.31', sources: ['A0', 'F3'], colorModes: ['1F'] },
+  ];
+  let features = 0;
+  for (const projector of projectors) {
+    features += assertCoreDevice(buildDevice(gladys, projector), projector.id);
+  }
+  assert.equal(features, 2 * Object.keys(FEATURE_SPECS).length);
 });
